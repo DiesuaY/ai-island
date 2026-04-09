@@ -22,6 +22,9 @@ public final class AppState {
     /// Tracks socket connections per session for sending responses
     private var sessionConnections: [String: SocketConnection] = [:]
 
+    /// Usage data from the statusline cache.
+    let usageReader = UsageCacheReader()
+
     /// Debounce sounds: don't play if last sound was < 2 seconds ago
     private var lastSoundTime: Date = .distantPast
 
@@ -31,6 +34,7 @@ public final class AppState {
     public init() {
         sessionManager.appState = self
         sessionManager.startExpirationTimer()
+        usageReader.startPolling()
     }
 
     // MARK: - Computed

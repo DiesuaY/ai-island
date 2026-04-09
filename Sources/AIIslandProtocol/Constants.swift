@@ -12,6 +12,11 @@ public enum AIIslandConstants {
 
     public static let protocolVersion: Int = 1
 
+    /// Path for the statusline cache file (context window + rate limits).
+    public static var statusCachePath: String {
+        "/tmp/aiisland-status.json"
+    }
+
     public static let bridgeBinaryName: String = "aibridge"
 
     /// Whether the process is running from inside a .app bundle.

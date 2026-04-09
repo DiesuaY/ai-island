@@ -104,6 +104,9 @@ struct MonitorModeView: View {
 
                 Spacer()
 
+                // Inline usage indicators
+                UsageInlineView()
+
                 statusDot(session.status)
 
                 Text(session.durationText)

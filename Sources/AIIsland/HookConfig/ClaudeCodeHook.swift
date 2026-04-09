@@ -72,6 +72,9 @@ struct ClaudeCodeHook: HookConfigurator {
             try fm.createDirectory(atPath: configDir, withIntermediateDirectories: true)
         }
 
+        // Write the statusline script first (installSettingsJSON references its path)
+        try installStatuslineScript()
+
         let existingData: Data? = fm.fileExists(atPath: settingsPath)
             ? try Data(contentsOf: URL(fileURLWithPath: settingsPath))
             : nil
@@ -108,8 +111,63 @@ struct ClaudeCodeHook: HookConfigurator {
             settings["hooks"] = hooks
         }
 
+        // Remove statusline if it points to our script
+        if let sl = settings["statusLine"] as? [String: Any],
+           let cmd = sl["command"] as? String,
+           cmd.contains(".aiisland/statusline.sh") {
+            settings.removeValue(forKey: "statusLine")
+        }
+
         try writeJSONDict(settings, to: settingsPath)
         logger.info("Claude Code hooks removed from \(settingsPath)")
+
+        // Clean up statusline script
+        try? FileManager.default.removeItem(atPath: statuslineScriptPath)
+    }
+
+    // MARK: - Statusline
+
+    /// The statusline script path.
+    private var statuslineScriptPath: String {
+        AIIslandConstants.socketDir + "/statusline.sh"
+    }
+
+    /// Write the statusline shell script to ~/.aiisland/statusline.sh.
+    /// The script caches usage JSON for AI Island, then auto-detects and chains to
+    /// claude-hud (or any other Node.js statusline plugin) if installed.
+    private func installStatuslineScript() throws {
+        let fm = FileManager.default
+        let dir = AIIslandConstants.socketDir
+        if !fm.fileExists(atPath: dir) {
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        }
+
+        let cachePath = AIIslandConstants.statusCachePath
+        let script = """
+        #!/bin/bash
+        # AI Island statusline script — caches Claude Code usage data.
+        # Receives statusline JSON on stdin, caches it, then forwards to claude-hud if installed.
+        INPUT=$(cat)
+        echo "$INPUT" > "\(cachePath)"
+        # Chain to claude-hud if installed
+        plugin_dir=$(ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/claude-hud/claude-hud/*/ 2>/dev/null | awk -F/ '{ print $(NF-1) "\\t" $0 }' | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1 | cut -f2-)
+        if [ -n "$plugin_dir" ]; then
+            runtime=$(command -v bun 2>/dev/null || command -v node 2>/dev/null)
+            if [ -n "$runtime" ]; then
+                if [ "$(basename "$runtime")" = "bun" ]; then
+                    source="src/index.ts"
+                else
+                    source="dist/index.js"
+                fi
+                echo "$INPUT" | "$runtime" "${plugin_dir}${source}"
+            fi
+        fi
+        """
+
+        try script.write(toFile: statuslineScriptPath, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: statuslineScriptPath)
+
+        logger.info("Statusline script installed at \(statuslineScriptPath)")
     }
 
     // MARK: - Hook Command
@@ -144,6 +202,13 @@ struct ClaudeCodeHook: HookConfigurator {
         }
 
         rootObject["hooks"] = hooksObject
+
+        // Also set the statusline command so settings.json is written only once
+        rootObject["statusLine"] = [
+            "type": "command",
+            "command": statuslineScriptPath,
+        ]
+
         return try JSONSerialization.data(withJSONObject: rootObject, options: [.prettyPrinted, .sortedKeys])
     }
 
