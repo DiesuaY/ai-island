@@ -1,0 +1,19 @@
+# Build artifacts
+.build/
+AIIsland.app/
+*.o
+*.swp
+
+# Python cache
+__pycache__/
+*.pyc
+Library/
+
+# macOS
+.DS_Store
+
+# Temporary
+/tmp/
+
+# Sounds placeholder (empty dir)
+Resources/Sounds/
