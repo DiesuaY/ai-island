@@ -7,16 +7,20 @@ final class IslandPanelController {
 
     private let panel: IslandPanel
     private let appState: AppState
+    private let settings: IslandSettings
 
     private let collapsedHeight: CGFloat = DesignTokens.pillHeight
     private let monitorHeight: CGFloat = 280
-    private let approveHeight: CGFloat = 360
-    private let askHeight: CGFloat = 200
+    private let approveHeight: CGFloat = 380
+    private let askHeight: CGFloat = 220
 
     private var modeObservation: Any?
+    private var screenObserver: Any?
+    private var autoHideTimer: Timer?
 
-    init(appState: AppState) {
+    init(appState: AppState, settings: IslandSettings = .shared) {
         self.appState = appState
+        self.settings = settings
 
         let initialRect = NSRect(x: 0, y: 0, width: DesignTokens.pillWidth, height: DesignTokens.pillHeight)
         panel = IslandPanel(contentRect: initialRect)
@@ -31,6 +35,7 @@ final class IslandPanelController {
 
         positionPanel()
         startModeObservation()
+        observeScreenChanges()
     }
 
     // MARK: - Public
@@ -74,10 +79,21 @@ final class IslandPanelController {
 
     private func handleModeChange() {
         let mode = appState.currentMode
+
+        // Cancel any pending auto-hide when mode changes
+        autoHideTimer?.invalidate()
+        autoHideTimer = nil
+
+        // Show panel if hidden (new activity arrived)
+        if !isVisible && mode != .idle {
+            showPanel()
+        }
+
         switch mode {
         case .idle:
             animateFrame(width: DesignTokens.pillWidth, height: collapsedHeight, cornerRadius: DesignTokens.pillRadius, duration: 0.25)
             panel.ignoresMouseEvents = false
+            scheduleAutoHideIfNeeded()
         case .monitor:
             let sessionCount = appState.sessions.count
             // Hero card ~90px + each row ~40px + header ~50px + notch 32px
@@ -105,18 +121,59 @@ final class IslandPanelController {
         }
     }
 
+    // MARK: - Auto-Hide (external monitors only)
+
+    private func scheduleAutoHideIfNeeded() {
+        guard settings.autoHideEnabled else { return }
+        // Only auto-hide on external monitors (no notch)
+        guard let screen = targetScreen(), !ScreenGeometry.hasNotch(screen: screen) else { return }
+
+        autoHideTimer?.invalidate()
+        autoHideTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(settings.autoHideSeconds), repeats: false) { [weak self] _ in
+            guard let self else { return }
+            // Only hide if still idle
+            if self.appState.currentMode == .idle {
+                self.hidePanel()
+            }
+        }
+    }
+
+    // MARK: - Screen Change Observation
+
+    private func observeScreenChanges() {
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleModeChange()
+        }
+    }
+
     // MARK: - Positioning
 
     /// Returns the safe area top inset (notch height), or 0 if no notch.
     private func safeAreaTop(for screen: NSScreen) -> CGFloat {
-        if #available(macOS 12.0, *) {
-            return screen.safeAreaInsets.top
+        return screen.safeAreaInsets.top
+    }
+
+    /// Calculates the panel's target screen. Uses the screen containing the panel's
+    /// current center point, falling back to ScreenGeometry.activeScreen().
+    private func targetScreen() -> NSScreen? {
+        let panelCenter = NSPoint(
+            x: panel.frame.midX,
+            y: panel.frame.midY
+        )
+        for screen in NSScreen.screens {
+            if screen.frame.contains(panelCenter) {
+                return screen
+            }
         }
-        return 0
+        return ScreenGeometry.activeScreen()
     }
 
     private func positionPanel() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = targetScreen() else { return }
 
         let screenFrame = screen.frame
         let safeTop = safeAreaTop(for: screen)
@@ -126,15 +183,10 @@ final class IslandPanelController {
         let height = collapsedHeight
         let x = screenFrame.midX - width / 2
 
-        // Top of panel is at screenFrame.maxY (very top of screen).
-        // In macOS coordinates, y is the bottom edge of the window.
-        // y = screenFrame.maxY - height places the window flush with the top.
         let y: CGFloat
         if hasNotch {
-            // Panel sits in the notch: top at screen top, height = safeAreaTop (32)
             y = screenFrame.maxY - height
         } else {
-            // External monitor: float at top center, just below menu bar
             let menuBarHeight: CGFloat = NSMenu.menuBarVisible() ? 24 : 0
             y = screenFrame.maxY - menuBarHeight - height - 4
         }
@@ -142,14 +194,13 @@ final class IslandPanelController {
         let frame = NSRect(x: x, y: y, width: width, height: height)
         panel.setFrame(frame, display: true)
 
-        // Set initial corner radius for collapsed pill
         panel.updateCornerRadius(DesignTokens.pillRadius)
     }
 
     // MARK: - Animation
 
     private func animateFrame(width: CGFloat, height: CGFloat, cornerRadius: CGFloat, duration: TimeInterval) {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = targetScreen() else { return }
 
         let screenFrame = screen.frame
         let safeTop = safeAreaTop(for: screen)
@@ -157,8 +208,6 @@ final class IslandPanelController {
 
         let x = screenFrame.midX - width / 2
 
-        // The TOP of the panel always stays at the screen's top edge.
-        // It grows downward by increasing height.
         let y: CGFloat
         if hasNotch {
             y = screenFrame.maxY - height
@@ -175,7 +224,6 @@ final class IslandPanelController {
             panel.animator().setFrame(newFrame, display: true)
         }
 
-        // Update corner radius (not animatable via NSAnimationContext, but visually fine)
         panel.updateCornerRadius(cornerRadius)
     }
 }

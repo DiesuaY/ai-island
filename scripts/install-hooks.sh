@@ -121,7 +121,7 @@ hook_defs = {
         "hooks": [
             {
                 "type": "command",
-                "command": '{aibridge} --event tool_use --session "claude-$PPID" --agent claude --terminal-pid $PPID'.format(aibridge=aibridge)
+                "command": 'cat | {aibridge} --event tool_use --session "claude-$PPID" --agent claude --terminal-pid $PPID'.format(aibridge=aibridge)
             }
         ]
     },
@@ -130,7 +130,7 @@ hook_defs = {
         "hooks": [
             {
                 "type": "command",
-                "command": '{aibridge} --event tool_result --session "claude-$PPID" --agent claude --terminal-pid $PPID'.format(aibridge=aibridge)
+                "command": 'cat | {aibridge} --event tool_result --session "claude-$PPID" --agent claude --terminal-pid $PPID'.format(aibridge=aibridge)
             }
         ]
     },
@@ -139,7 +139,7 @@ hook_defs = {
         "hooks": [
             {
                 "type": "command",
-                "command": '{aibridge} --event status --session "claude-$PPID" --agent claude --terminal-pid $PPID'.format(aibridge=aibridge)
+                "command": 'cat | {aibridge} --event status --session "claude-$PPID" --agent claude --terminal-pid $PPID'.format(aibridge=aibridge)
             }
         ]
     },

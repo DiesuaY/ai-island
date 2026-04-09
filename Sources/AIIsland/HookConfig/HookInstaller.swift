@@ -13,7 +13,7 @@ final class HookInstaller {
     }
 
     /// The current hook configuration version. Bump this to force re-installation.
-    static let hookVersion = 3
+    static let hookVersion = 4
 
     /// All known hook configurators.
     private static let configurators: [HookConfigurator] = [

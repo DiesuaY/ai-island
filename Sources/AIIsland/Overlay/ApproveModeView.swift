@@ -1,6 +1,7 @@
 import SwiftUI
+import AIIslandProtocol
 
-/// Permission approval view with diff preview and Allow/Deny buttons.
+/// Permission approval view with diff preview and rich permission option buttons.
 struct ApproveModeView: View {
     @Environment(AppState.self) private var appState
 
@@ -125,14 +126,12 @@ struct ApproveModeView: View {
 
     private func diffLine(lineNumber: Int, content: String) -> some View {
         HStack(spacing: 0) {
-            // Line number
             Text("\(lineNumber)")
                 .font(DesignTokens.codeFont)
                 .foregroundStyle(Color.white.opacity(0.3))
                 .frame(width: 32, alignment: .trailing)
                 .padding(.trailing, 8)
 
-            // Content
             Text(content)
                 .font(DesignTokens.codeFont)
                 .foregroundStyle(diffLineColor(content))
@@ -159,46 +158,79 @@ struct ApproveModeView: View {
     // MARK: - Action Buttons
 
     private var actionButtons: some View {
-        HStack(spacing: 10) {
-            Spacer()
-
-            // Deny
-            Button {
-                appState.handlePermissionResponse(allow: false)
-            } label: {
-                HStack(spacing: 4) {
-                    Text("Deny")
-                    Text("(\u{2318}N)")
-                        .foregroundStyle(.white.opacity(0.5))
+        VStack(spacing: 6) {
+            // Primary row: Deny + Allow Once
+            HStack(spacing: 10) {
+                // Deny
+                Button {
+                    appState.handlePermissionResponse(allow: false)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Deny")
+                        Text("(\u{2318}N)")
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                    .background(Color.red.opacity(0.8))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 7)
-                .background(Color.red.opacity(0.8))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut("n", modifiers: .command)
+                .buttonStyle(.plain)
+                .keyboardShortcut("n", modifiers: .command)
 
-            // Allow
-            Button {
-                appState.handlePermissionResponse(allow: true)
-            } label: {
-                HStack(spacing: 4) {
-                    Text("Allow")
-                    Text("(\u{2318}Y)")
-                        .foregroundStyle(.white.opacity(0.5))
+                Spacer()
+
+                // Allow Once
+                Button {
+                    appState.handlePermissionResponse(allow: true)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Allow Once")
+                        Text("(\u{2318}Y)")
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                    .background(Color.green.opacity(0.8))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 7)
-                .background(Color.green.opacity(0.8))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .buttonStyle(.plain)
+                .keyboardShortcut("y", modifiers: .command)
             }
-            .buttonStyle(.plain)
-            .keyboardShortcut("y", modifiers: .command)
+
+            // Permission suggestion buttons (from Claude Code)
+            if let pending = appState.pendingPermission, !pending.suggestedUpdates.isEmpty {
+                ForEach(Array(pending.suggestedUpdates.enumerated()), id: \.offset) { index, update in
+                    Button {
+                        appState.handlePermissionResponse(withUpdates: [update])
+                    } label: {
+                        Text(update.displayLabel)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(suggestionButtonColor(for: update).opacity(0.6))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    /// Color for permission suggestion buttons based on the type of update.
+    private func suggestionButtonColor(for update: ClaudePermissionUpdate) -> Color {
+        switch update {
+        case .addRules:
+            return DesignTokens.accent
+        case .setMode:
+            return Color.orange
+        default:
+            return Color.blue
         }
     }
 }

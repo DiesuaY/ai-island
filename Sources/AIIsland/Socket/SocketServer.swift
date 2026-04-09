@@ -48,7 +48,6 @@ final class SocketServer {
                 NSLog("[AIIsland] Socket server listening on \(socketPath)")
             case .failed(let error):
                 NSLog("[AIIsland] Socket server failed: \(error)")
-                // Try to restart after a brief delay
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                     self?.start()
                 }
@@ -84,9 +83,9 @@ final class SocketServer {
         let connection = SocketConnection(connection: nwConnection, queue: queue)
         let connId = ObjectIdentifier(connection)
 
-        connection.onMessage = { [weak self] message in
+        connection.onCommand = { [weak self] command in
             DispatchQueue.main.async {
-                self?.appState.dispatch(message, from: connection)
+                self?.appState.dispatch(command, from: connection)
             }
         }
 

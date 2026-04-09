@@ -1,13 +1,16 @@
 import AppKit
+import SwiftUI
 import AIIslandProtocol
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let appState = AppState()
+    let settings = IslandSettings.shared
     private var socketServer: SocketServer?
     private var panelController: IslandPanelController?
     private var statusItem: NSStatusItem?
     private var localEventMonitor: Any?
+    private var settingsWindow: NSWindow?
 
     // MARK: - Application Lifecycle
 
@@ -37,45 +40,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
                 button.image = image.withSymbolConfiguration(config)
             } else {
-                // Fallback: text label if SF Symbols unavailable
-                button.title = "🏝"
+                button.title = "AI"
             }
         }
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Show Island", action: #selector(toggleIsland), keyEquivalent: ""))
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Install Hooks...", action: #selector(installHooks), keyEquivalent: ""))
-        menu.addItem(NSMenuItem.separator())
-
-        let soundItem = NSMenuItem(title: "Sound Effects", action: #selector(toggleSound), keyEquivalent: "")
-        soundItem.state = appState.soundEnabled ? .on : .off
-        menu.addItem(soundItem)
-
+        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit AI Island", action: #selector(quitApp), keyEquivalent: "q"))
 
         statusItem?.menu = menu
     }
 
-    @objc private func toggleIsland() {
-        panelController?.toggleVisibility()
+    // MARK: - Settings Window
+
+    @objc private func openSettings() {
+        if let existing = settingsWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let settingsView = SettingsView(settings: settings)
+        let hostingView = NSHostingView(rootView: settingsView)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 360, height: 350)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 350),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "AI Island Settings"
+        window.contentView = hostingView
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+
+        // Activate app so settings window is focusable
+        NSApp.activate(ignoringOtherApps: true)
+
+        settingsWindow = window
     }
 
     // MARK: - Island Panel
 
     private func setupIslandPanel() {
-        panelController = IslandPanelController(appState: appState)
+        panelController = IslandPanelController(appState: appState, settings: settings)
         panelController?.showPanel()
-    }
-
-    @objc private func installHooks() {
-        HookInstaller.installAll(force: true)
-    }
-
-    @objc private func toggleSound(_ sender: NSMenuItem) {
-        appState.soundEnabled.toggle()
-        sender.state = appState.soundEnabled ? .on : .off
     }
 
     @objc private func quitApp() {

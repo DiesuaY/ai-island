@@ -6,10 +6,13 @@ struct IslandContentView: View {
 
     /// The notch/safe area height. Content in expanded modes is pushed below this.
     private var notchHeight: CGFloat {
-        if #available(macOS 12.0, *) {
-            return NSScreen.main?.safeAreaInsets.top ?? 0
-        }
-        return 0
+        let screen = ScreenGeometry.activeScreen() ?? NSScreen.main
+        return screen?.safeAreaInsets.top ?? 0
+    }
+
+    /// Whether the current screen has a notch.
+    private var hasNotch: Bool {
+        notchHeight > 0
     }
 
     private var isExpanded: Bool {
@@ -24,13 +27,15 @@ struct IslandContentView: View {
             DesignTokens.background
 
             if isExpanded {
-                // Expanded modes: idle pill in the notch area, content below
+                // Expanded modes: content below notch bar (if notch) or with top padding
                 VStack(spacing: 0) {
-                    // Notch area: show a mini status bar
-                    notchBar
-                        .frame(height: notchHeight > 0 ? notchHeight : 0)
+                    if hasNotch {
+                        // Notch area: show a mini status bar inside the notch
+                        notchBar
+                            .frame(height: notchHeight)
+                    }
 
-                    // Content area below the notch
+                    // Content area
                     Group {
                         switch appState.currentMode {
                         case .monitor:

@@ -6,166 +6,105 @@ import Darwin
 import Glibc
 #endif
 
-// MARK: - CLI Argument Parsing
+// MARK: - Entry Point
 
-private struct CLIArgs {
-    var event: String = ""
-    var session: String = ""
-    var agent: String = "unknown"
-    var terminalPid: Int?
-    var terminalApp: String?
-}
+@main
+struct AIBridge {
+    /// Permission requests get 24 hours — user may respond from the overlay at any time.
+    private static let interactiveTimeout: TimeInterval = 24 * 60 * 60
+    /// Non-interactive hooks get 45 seconds max.
+    private static let defaultTimeout: TimeInterval = 45
 
-private func parseArgs() -> CLIArgs {
-    var args = CLIArgs()
-    let argv = CommandLine.arguments
-    var i = 1
-    while i < argv.count {
-        switch argv[i] {
-        case "--event" where i + 1 < argv.count:
-            i += 1; args.event = argv[i]
-        case "--session" where i + 1 < argv.count:
-            i += 1; args.session = argv[i]
-        case "--agent" where i + 1 < argv.count:
-            i += 1; args.agent = argv[i]
-        case "--terminal-pid" where i + 1 < argv.count:
-            i += 1; args.terminalPid = Int(argv[i])
-        case "--terminal-app" where i + 1 < argv.count:
-            i += 1; args.terminalApp = argv[i]
-        default:
-            break
+    static func main() {
+        do {
+            // 1. Read stdin (Claude Code pipes JSON here)
+            let input = FileHandle.standardInput.readDataToEndOfFile()
+            guard !input.isEmpty else { return }
+
+            // 2. Parse --source argument
+            let source = parseSource()
+
+            // 3. Decode Claude's native hook payload
+            let decoder = JSONDecoder()
+            var payload = try decoder.decode(ClaudeHookPayload.self, from: input)
+            payload.hookSource = source
+
+            // 4. Determine timeout based on event type
+            let timeout = payload.hookEventName == .permissionRequest
+                ? interactiveTimeout
+                : defaultTimeout
+
+            // 5. Connect to Island app socket and send command
+            let socketPath = AIIslandConstants.socketPath
+            guard FileManager.default.fileExists(atPath: socketPath) else {
+                logStderr("socket not found at \(socketPath)")
+                return
+            }
+
+            let fd = connectToSocket(path: socketPath)
+            guard fd >= 0 else {
+                logStderr("could not connect to socket")
+                return
+            }
+            defer { close(fd) }
+
+            // Set socket timeout
+            setSocketTimeout(fd: fd, seconds: timeout)
+
+            // 6. Encode and send BridgeCommand
+            let command = BridgeCommand.processClaudeHook(payload)
+            let wireData = try BridgeCodec.encodeCommand(command)
+            guard sendAll(fd: fd, data: wireData) else {
+                logStderr("failed to send command")
+                return
+            }
+
+            // 7. For non-interactive events, we're done after sending
+            guard payload.hookEventName == .permissionRequest else {
+                // Wait briefly for acknowledgment but don't block
+                _ = readResponse(fd: fd, timeoutSeconds: 5)
+                return
+            }
+
+            // 8. For PermissionRequest: block and wait for the user's decision
+            guard let responseData = readResponseLine(fd: fd, timeoutSeconds: Int(interactiveTimeout)) else {
+                logStderr("timeout waiting for permission response")
+                return
+            }
+
+            let response = try BridgeCodec.decodeResponse(from: responseData)
+
+            // 9. Convert BridgeResponse to Claude Code stdout format
+            if case let .claudeHookDirective(directive) = response {
+                if let output = try ClaudeHookOutputEncoder.standardOutput(for: directive) {
+                    FileHandle.standardOutput.write(output)
+                }
+            }
+        } catch {
+            // Hooks must fail open — never break the AI agent
+            logStderr("hook failed: \(error)")
         }
-        i += 1
-    }
-    return args
-}
-
-// MARK: - Stdin Reading
-
-private func readStdinIfAvailable() -> Data? {
-    // Check if stdin has data (is not a terminal / has piped input)
-    guard !isatty(STDIN_FILENO).toBool() else { return nil }
-
-    var data = Data()
-    let bufferSize = 4096
-    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-    defer { buffer.deallocate() }
-
-    while true {
-        let bytesRead = read(STDIN_FILENO, buffer, bufferSize)
-        if bytesRead <= 0 { break }
-        data.append(buffer, count: bytesRead)
     }
 
-    return data.isEmpty ? nil : data
-}
+    // MARK: - Argument Parsing
 
-// MARK: - Event Parsing
-
-private func parseEvent(
-    name: String,
-    payload: Data?,
-    terminalPid: Int?,
-    terminalApp: String?
-) -> (AgentEvent, MessagePayload)? {
-    let json: [String: Any]? = {
-        guard let payload else { return nil }
-        return try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
-    }()
-
-    switch name {
-    case "session_start":
-        let p = SessionStartPayload(
-            workingDirectory: json?["workingDirectory"] as? String ?? "",
-            terminalPid: terminalPid,
-            terminalApp: terminalApp,
-            prompt: json?["prompt"] as? String
-        )
-        return (.sessionStart, .sessionStart(p))
-
-    case "session_end":
-        let p = SessionEndPayload(
-            reason: json?["reason"] as? String,
-            totalTokens: json?["totalTokens"] as? Int
-        )
-        return (.sessionEnd, .sessionEnd(p))
-
-    case "tool_use":
-        // Claude Code sends: {"tool_name": "Read", "tool_input": {"file_path": "..."}}
-        let toolName = json?["tool_name"] as? String ?? json?["toolName"] as? String ?? json?["tool"] as? String ?? "unknown"
-        let toolInput = json?["tool_input"] as? [String: Any]
-        let inputStr = json?["input"] as? String ?? {
-            guard let ti = toolInput else { return nil }
-            return (try? JSONSerialization.data(withJSONObject: ti))
-                .flatMap { String(data: $0, encoding: .utf8) }
-        }()
-        let p = ToolUsePayload(tool: toolName, input: inputStr)
-        return (.toolUse, .toolUse(p))
-
-    case "tool_result":
-        let toolName = json?["tool_name"] as? String ?? json?["toolName"] as? String ?? json?["tool"] as? String ?? "unknown"
-        let p = ToolResultPayload(
-            tool: toolName,
-            success: json?["success"] as? Bool ?? true,
-            output: json?["output"] as? String
-        )
-        return (.toolResult, .toolResult(p))
-
-    case "permission_request":
-        let toolName = json?["tool_name"] as? String ?? json?["toolName"] as? String ?? json?["tool"] as? String ?? "unknown"
-        let toolInput = json?["tool_input"] as? [String: Any]
-        let inputStr = json?["input"] as? String ?? {
-            guard let ti = toolInput else { return nil }
-            return (try? JSONSerialization.data(withJSONObject: ti))
-                .flatMap { String(data: $0, encoding: .utf8) }
-        }()
-        let p = PermissionRequestPayload(
-            tool: toolName,
-            input: inputStr,
-            description: json?["description"] as? String,
-            riskLevel: json?["riskLevel"] as? String,
-            command: toolInput?["command"] as? String ?? json?["command"] as? String,
-            filePath: toolInput?["file_path"] as? String ?? json?["filePath"] as? String,
-            diff: json?["diff"] as? String
-        )
-        return (.permissionRequest, .permissionRequest(p))
-
-    case "ask":
-        let p = AskPromptPayload(
-            question: json?["question"] as? String ?? "",
-            options: json?["options"] as? [String]
-        )
-        return (.ask, .ask(p))
-
-    case "thinking":
-        let p = ThinkingPayload(summary: json?["summary"] as? String)
-        return (.thinking, .thinking(p))
-
-    case "response":
-        let p = ResponsePayload(
-            text: json?["text"] as? String,
-            tokens: json?["tokens"] as? Int
-        )
-        return (.response, .response(p))
-
-    case "status", "notification":
-        // Claude Code Notification hook — fires when task completes / waiting for input
-        // Map to .response so the app can show completion without killing the session
-        let text = json?["message"] as? String ?? json?["title"] as? String ?? "Task complete"
-        let p = ResponsePayload(text: text, tokens: nil)
-        return (.response, .response(p))
-
-    case "error":
-        let message = json?["message"] as? String ?? "unknown error"
-        let p = ErrorPayload(message: message, code: json?["code"] as? String)
-        return (.error, .error(p))
-
-    case "heartbeat":
-        let p = HeartbeatPayload(uptimeSeconds: json?["uptimeSeconds"] as? Int)
-        return (.heartbeat, .heartbeat(p))
-
-    default:
+    private static func parseSource() -> String? {
+        let args = CommandLine.arguments
+        var i = 1
+        while i < args.count {
+            if args[i] == "--source", i + 1 < args.count {
+                return args[i + 1]
+            }
+            i += 1
+        }
         return nil
+    }
+
+    // MARK: - Logging
+
+    private static func logStderr(_ message: String) {
+        guard let data = "[aibridge] \(message)\n".data(using: .utf8) else { return }
+        FileHandle.standardError.write(data)
     }
 }
 
@@ -208,6 +147,16 @@ private func connectToSocket(path: String) -> Int32 {
     return fd
 }
 
+/// Set send/receive timeouts on a socket.
+private func setSocketTimeout(fd: Int32, seconds: TimeInterval) {
+    var tv = timeval(
+        tv_sec: Int(seconds),
+        tv_usec: Int32((seconds - floor(seconds)) * 1_000_000)
+    )
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+}
+
 /// Send data over a file descriptor. Returns true on success.
 @discardableResult
 private func sendAll(fd: Int32, data: Data) -> Bool {
@@ -223,9 +172,8 @@ private func sendAll(fd: Int32, data: Data) -> Bool {
     }
 }
 
-/// Read data from file descriptor until newline or timeout.
-/// Uses poll() for timeout support.
-private func readResponse(fd: Int32, timeoutSeconds: Int) -> Data? {
+/// Read data from file descriptor until newline (NDJSON line) or timeout.
+private func readResponseLine(fd: Int32, timeoutSeconds: Int) -> Data? {
     var accumulated = Data()
     let bufferSize = 4096
     let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
@@ -240,215 +188,37 @@ private func readResponse(fd: Int32, timeoutSeconds: Int) -> Data? {
         var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         let pollResult = poll(&pfd, 1, min(remainingMs, 1000))
 
-        if pollResult < 0 { break }  // error
-        if pollResult == 0 { continue }  // timeout, loop to check deadline
+        if pollResult < 0 { break }
+        if pollResult == 0 { continue }
 
         let bytesRead = recv(fd, buffer, bufferSize, 0)
         if bytesRead <= 0 { break }
 
         accumulated.append(buffer, count: bytesRead)
 
-        // NDJSON: check if we have a complete line
-        if accumulated.contains(UInt8(ascii: "\n")) {
-            return accumulated
+        // NDJSON: look for complete line
+        if let newlineIdx = accumulated.firstIndex(of: UInt8(ascii: "\n")) {
+            return Data(accumulated[accumulated.startIndex..<newlineIdx])
         }
     }
 
     return accumulated.isEmpty ? nil : accumulated
 }
 
-// MARK: - Int32 convenience
+/// Read any data from socket (used for non-blocking acknowledgment reads).
+private func readResponse(fd: Int32, timeoutSeconds: Int) -> Data? {
+    var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+    let pollResult = poll(&pfd, 1, Int32(timeoutSeconds * 1000))
+    guard pollResult > 0 else { return nil }
 
-extension Int32 {
-    fileprivate func toBool() -> Bool { self != 0 }
-}
+    let bufferSize = 4096
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+    defer { buffer.deallocate() }
 
-// MARK: - Entry Point
+    let bytesRead = recv(fd, buffer, bufferSize, 0)
+    guard bytesRead > 0 else { return nil }
 
-@main
-struct AIBridge {
-    static func main() async throws {
-        let cli = parseArgs()
-
-        guard !cli.event.isEmpty, !cli.session.isEmpty else {
-            exit(0)  // Missing required args — exit silently
-        }
-
-        // Parse the agent type
-        let agentType = AgentType(rawValue: cli.agent) ?? .unknown
-
-        // Read stdin payload if piped
-        let stdinData = readStdinIfAvailable()
-
-        // Pre-parse stdin JSON to extract session_id and cwd from Claude Code
-        var stdinJson: [String: Any]? = nil
-        if let data = stdinData {
-            stdinJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        }
-
-        // Use session_id from stdin JSON if available (Claude Code provides a stable UUID)
-        let sessionId: String
-        if let claudeSessionId = stdinJson?["session_id"] as? String {
-            sessionId = "claude-" + String(claudeSessionId.prefix(8))
-        } else {
-            sessionId = cli.session
-        }
-
-        // Extract cwd from stdin JSON (Claude Code sends it on every hook event)
-        let workingDirectory = stdinJson?["cwd"] as? String
-
-        // Auto-upgrade tool_use to permission_request when Claude Code requires approval.
-        // Claude Code sends permission_mode in stdin JSON:
-        //   "default" = user must approve dangerous tools
-        //   "acceptEdits" = auto-approve edits, ask for Bash
-        // For these modes, upgrade to permission_request so the panel shows Allow/Deny.
-        var effectiveEvent = cli.event
-        if cli.event == "tool_use" {
-            let permMode = stdinJson?["permission_mode"] as? String ?? ""
-            let toolName = stdinJson?["tool_name"] as? String ?? ""
-            let dangerousTools = ["Bash", "Write", "Edit", "NotebookEdit"]
-
-            if permMode == "default" && dangerousTools.contains(toolName) {
-                effectiveEvent = "permission_request"
-            } else if permMode == "acceptEdits" && toolName == "Bash" {
-                effectiveEvent = "permission_request"
-            }
-        }
-
-        // Parse event
-        guard let (event, payload) = parseEvent(
-            name: effectiveEvent,
-            payload: stdinData,
-            terminalPid: cli.terminalPid,
-            terminalApp: cli.terminalApp
-        ) else {
-            exit(0)  // Unknown event — exit silently
-        }
-
-        // Construct the BridgeMessage
-        let message = BridgeMessage(
-            version: AIIslandConstants.protocolVersion,
-            sessionId: sessionId,
-            agent: agentType,
-            event: event,
-            timestamp: Date(),
-            payload: payload,
-            terminalPid: cli.terminalPid,
-            terminalApp: cli.terminalApp,
-            workingDirectory: workingDirectory
-        )
-
-        // Encode to NDJSON
-        let jsonEncoder = JSONEncoder()
-        jsonEncoder.dateEncodingStrategy = .iso8601
-        guard var wireData = try? jsonEncoder.encode(message) else {
-            exit(0)
-        }
-        // Ensure trailing newline for NDJSON
-        wireData.append(UInt8(0x0A))
-
-        // Check if socket exists before attempting connection
-        let socketPath = AIIslandConstants.socketPath
-        guard FileManager.default.fileExists(atPath: socketPath) else {
-            exit(0)  // No socket — exit silently
-        }
-
-        // Connect to socket
-        let fd = connectToSocket(path: socketPath)
-        guard fd >= 0 else {
-            exit(0)  // Connection failed — exit silently
-        }
-        defer { close(fd) }
-
-        // Send the message
-        guard sendAll(fd: fd, data: wireData) else {
-            exit(0)
-        }
-
-        // Determine if we need to wait for a response
-        let needsResponse: Bool = {
-            switch effectiveEvent {
-            case "permission_request", "ask":
-                return true
-            default:
-                return false
-            }
-        }()
-
-        guard needsResponse else {
-            // Fire-and-forget: done
-            exit(0)
-        }
-
-        // Block and wait for response (120s timeout)
-        guard let responseData = readResponse(fd: fd, timeoutSeconds: 120) else {
-            // Timeout or read failure
-            handleTimeout(event: effectiveEvent)
-            exit(1)
-        }
-
-        // Decode AppResponse
-        // Strip trailing newline for NDJSON
-        let trimmedData: Data
-        if let newlineIdx = responseData.firstIndex(of: UInt8(0x0A)) {
-            trimmedData = Data(responseData[responseData.startIndex..<newlineIdx])
-        } else {
-            trimmedData = responseData
-        }
-        let jsonDecoder = JSONDecoder()
-        guard let response = try? jsonDecoder.decode(AppResponse.self, from: trimmedData)
-        else {
-            handleTimeout(event: effectiveEvent)
-            exit(1)
-        }
-
-        // Handle the response based on event type
-        switch effectiveEvent {
-        case "permission_request":
-            handlePermissionResponse(response.action)
-
-        case "ask":
-            handleAskResponse(response)
-
-        default:
-            exit(0)
-        }
-    }
-
-    // MARK: - Response Handlers
-
-    private static func handlePermissionResponse(_ action: ResponseAction) -> Never {
-        switch action {
-        case .allow:
-            print("{\"decision\":\"allow\"}")
-            exit(0)
-        case .deny:
-            print("{\"decision\":\"deny\"}")
-            exit(1)
-        default:
-            print("{\"decision\":\"deny\"}")
-            exit(1)
-        }
-    }
-
-    private static func handleAskResponse(_ response: AppResponse) -> Never {
-        switch response.action {
-        case .chooseOption(let index):
-            print("\(index)")
-            exit(0)
-        case .answer:
-            // Print the free-form text answer to stdout
-            let text = response.data?.text ?? ""
-            print(text)
-            exit(0)
-        default:
-            exit(1)
-        }
-    }
-
-    private static func handleTimeout(event: String) {
-        if event == "permission_request" {
-            print("{\"decision\":\"deny\"}")
-        }
-    }
+    var data = Data()
+    data.append(buffer, count: bytesRead)
+    return data
 }

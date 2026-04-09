@@ -3,7 +3,7 @@ import Foundation
 import os
 
 /// Installs hooks into Claude Code's ~/.claude/settings.json.
-/// Hooks notify AI Island about tool use events, permission requests, and status changes.
+/// Uses the same pattern as open-vibe-island: one hook per event, --source claude.
 struct ClaudeCodeHook: HookConfigurator {
 
     let toolName = "Claude Code"
@@ -23,14 +23,33 @@ struct ClaudeCodeHook: HookConfigurator {
     /// Marker to identify hooks installed by AI Island.
     private static let hookMarker = "aibridge"
 
+    /// Permission request hooks get 24 hours for user response.
+    private static let permissionTimeout = 86_400
+
+    /// All Claude Code hook events to install.
+    private static let eventSpecs: [(name: String, matcher: String?, timeout: Int?)] = [
+        ("UserPromptSubmit", nil, nil),
+        ("SessionStart", nil, nil),
+        ("SessionEnd", nil, nil),
+        ("Stop", nil, nil),
+        ("StopFailure", nil, nil),
+        ("SubagentStart", nil, nil),
+        ("SubagentStop", nil, nil),
+        ("Notification", "*", nil),
+        ("PreToolUse", "*", nil),
+        ("PermissionRequest", "*", permissionTimeout),
+        ("PostToolUse", "*", nil),
+        ("PostToolUseFailure", "*", nil),
+        ("PermissionDenied", "*", nil),
+        ("PreCompact", nil, nil),
+    ]
+
     // MARK: - HookConfigurator
 
     func isInstalled() -> Bool {
-        // Check if ~/.claude directory exists, or create it so hooks can be bootstrapped
         if FileManager.default.fileExists(atPath: configDir) {
             return true
         }
-        // Also check if the `claude` command is available in PATH
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         process.arguments = ["claude"]
@@ -46,52 +65,40 @@ struct ClaudeCodeHook: HookConfigurator {
     }
 
     func installHook() throws {
-        var settings = try readJSONDict(at: settingsPath)
+        let fm = FileManager.default
 
-        // Build the hooks dictionary
-        let hooks = buildHooksConfig()
-
-        // Merge with existing hooks — preserve user hooks, replace AI Island hooks
-        if var existingHooks = settings["hooks"] as? [String: Any] {
-            for (eventType, newHookEntries) in hooks {
-                if var existingEntries = existingHooks[eventType] as? [[String: Any]] {
-                    // Remove any existing AI Island hooks
-                    existingEntries.removeAll { entry in
-                        isAIIslandHook(entry)
-                    }
-                    // Add our hooks
-                    if let newEntries = newHookEntries as? [[String: Any]] {
-                        existingEntries.append(contentsOf: newEntries)
-                    }
-                    existingHooks[eventType] = existingEntries
-                } else {
-                    existingHooks[eventType] = newHookEntries
-                }
-            }
-            settings["hooks"] = existingHooks
-        } else {
-            settings["hooks"] = hooks
+        // Ensure ~/.claude directory exists
+        if !fm.fileExists(atPath: configDir) {
+            try fm.createDirectory(atPath: configDir, withIntermediateDirectories: true)
         }
 
-        try writeJSONDict(settings, to: settingsPath)
-        logger.info("Claude Code hooks written to \(settingsPath)")
+        let existingData: Data? = fm.fileExists(atPath: settingsPath)
+            ? try Data(contentsOf: URL(fileURLWithPath: settingsPath))
+            : nil
+
+        let hookCommand = buildHookCommand()
+        let updatedData = try installSettingsJSON(existingData: existingData, hookCommand: hookCommand)
+
+        if let data = updatedData {
+            try data.write(to: URL(fileURLWithPath: settingsPath))
+            logger.info("Claude Code hooks written to \(settingsPath)")
+        }
     }
 
     func uninstallHook() throws {
         guard FileManager.default.fileExists(atPath: settingsPath) else { return }
 
         var settings = try readJSONDict(at: settingsPath)
-
         guard var hooks = settings["hooks"] as? [String: Any] else { return }
 
-        for (eventType, entries) in hooks {
-            if var entryList = entries as? [[String: Any]] {
-                entryList.removeAll { isAIIslandHook($0) }
-                if entryList.isEmpty {
-                    hooks.removeValue(forKey: eventType)
-                } else {
-                    hooks[eventType] = entryList
-                }
+        for spec in Self.eventSpecs {
+            let existingGroups = hooks[spec.name] as? [Any] ?? []
+            let cleanedGroups = sanitize(groups: existingGroups)
+
+            if cleanedGroups.isEmpty {
+                hooks.removeValue(forKey: spec.name)
+            } else {
+                hooks[spec.name] = cleanedGroups
             }
         }
 
@@ -105,59 +112,106 @@ struct ClaudeCodeHook: HookConfigurator {
         logger.info("Claude Code hooks removed from \(settingsPath)")
     }
 
-    // MARK: - Hook Configuration
+    // MARK: - Hook Command
 
-    /// Build the Claude Code hooks configuration dictionary.
-    ///
-    /// Claude Code pipes JSON on stdin to hook commands. The aibridge binary
-    /// reads stdin natively, so we use `cat |` to ensure the pipe stays open.
-    /// `$PPID` is the parent PID (the Claude Code process), stable across all hooks in a session.
-    private func buildHooksConfig() -> [String: Any] {
-        let aibridgePath = AIIslandConstants.aibridgePath
+    /// Build the hook command: path to aibridge with --source claude
+    private func buildHookCommand() -> String {
+        let path = AIIslandConstants.aibridgePath
+        return "\(shellQuote(path)) --source claude"
+    }
 
-        return [
-            "PreToolUse": [
-                [
-                    "matcher": "",
-                    "hooks": [
-                        [
-                            "type": "command",
-                            "command": "cat | \(aibridgePath) --event permission_request --session \"claude-$PPID\" --agent claude --terminal-pid $PPID"
-                        ]
-                    ]
-                ] as [String: Any]
-            ],
-            "PostToolUse": [
-                [
-                    "matcher": "",
-                    "hooks": [
-                        [
-                            "type": "command",
-                            "command": "cat | \(aibridgePath) --event tool_result --session \"claude-$PPID\" --agent claude --terminal-pid $PPID"
-                        ]
-                    ]
-                ] as [String: Any]
-            ],
-            "Notification": [
-                [
-                    "matcher": "",
-                    "hooks": [
-                        [
-                            "type": "command",
-                            "command": "cat | \(aibridgePath) --event status --session \"claude-$PPID\" --agent claude --terminal-pid $PPID"
-                        ]
-                    ]
-                ] as [String: Any]
-            ],
+    // MARK: - Settings JSON Manipulation
+
+    private func installSettingsJSON(existingData: Data?, hookCommand: String) throws -> Data? {
+        var rootObject = try loadRootObject(from: existingData)
+        let existingHooksObject = rootObject["hooks"] as? [String: Any] ?? [:]
+        var hooksObject: [String: Any] = [:]
+
+        // Preserve non-AI-Island hooks from all event types
+        for (eventName, value) in existingHooksObject {
+            let existingGroups = value as? [Any] ?? []
+            let cleanedGroups = sanitizeForInstall(groups: existingGroups)
+            if !cleanedGroups.isEmpty {
+                hooksObject[eventName] = cleanedGroups
+            }
+        }
+
+        // Add our managed hooks for each event
+        for spec in Self.eventSpecs {
+            let existingGroups = hooksObject[spec.name] as? [Any] ?? []
+            let cleanedGroups = sanitizeForInstall(groups: existingGroups)
+            hooksObject[spec.name] = cleanedGroups + [managedGroup(matcher: spec.matcher, timeout: spec.timeout, hookCommand: hookCommand)]
+        }
+
+        rootObject["hooks"] = hooksObject
+        return try JSONSerialization.data(withJSONObject: rootObject, options: [.prettyPrinted, .sortedKeys])
+    }
+
+    private func managedGroup(matcher: String?, timeout: Int?, hookCommand: String) -> [String: Any] {
+        var hook: [String: Any] = [
+            "type": "command",
+            "command": hookCommand,
         ]
+        if let timeout {
+            hook["timeout"] = timeout
+        }
+
+        var group: [String: Any] = [
+            "hooks": [hook],
+        ]
+        if let matcher {
+            group["matcher"] = matcher
+        }
+
+        return group
+    }
+
+    // MARK: - Sanitization (remove old AI Island hooks)
+
+    /// Remove AI Island hooks, keep user hooks.
+    private func sanitize(groups: [Any]) -> [[String: Any]] {
+        groups.compactMap { item in
+            guard var group = item as? [String: Any] else { return nil }
+
+            let existingHooks = group["hooks"] as? [Any] ?? []
+            let filteredHooks = existingHooks.compactMap { hook -> [String: Any]? in
+                guard let hook = hook as? [String: Any] else { return nil }
+                return isAIIslandHook(hook) ? nil : hook
+            }
+
+            guard !filteredHooks.isEmpty else { return nil }
+            group["hooks"] = filteredHooks
+            return group
+        }
+    }
+
+    /// Remove AI Island hooks during install (same as sanitize).
+    private func sanitizeForInstall(groups: [Any]) -> [[String: Any]] {
+        sanitize(groups: groups)
     }
 
     /// Check if a hook entry was installed by AI Island.
-    private func isAIIslandHook(_ entry: [String: Any]) -> Bool {
-        guard let hooks = entry["hooks"] as? [[String: Any]] else { return false }
-        return hooks.contains { hook in
-            guard let command = hook["command"] as? String else { return false }
-            return command.contains(Self.hookMarker)
+    private func isAIIslandHook(_ hook: [String: Any]) -> Bool {
+        guard let command = hook["command"] as? String else { return false }
+        let normalized = command.lowercased()
+        return normalized.contains(Self.hookMarker)
+            || normalized.contains("aiisland")
+            || normalized.contains("ai-island")
+    }
+
+    // MARK: - Helpers
+
+    private func loadRootObject(from data: Data?) throws -> [String: Any] {
+        guard let data else { return [:] }
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard let rootObject = object as? [String: Any] else {
+            throw NSError(domain: "ClaudeCodeHook", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid settings.json"])
         }
+        return rootObject
+    }
+
+    private func shellQuote(_ string: String) -> String {
+        guard !string.isEmpty else { return "''" }
+        return "'\(string.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }

@@ -32,9 +32,10 @@ Binaries land in `.build/debug/` or `.build/release/`.
 
 Communication between bridge and app uses **NDJSON** (newline-delimited JSON) over a **Unix domain socket** at `~/.aiisland/island.sock`.
 
-- **Bridge → App**: `BridgeMessage` with flat `AgentEvent` enum + separate `MessagePayload` enum carrying typed payloads
-- **App → Bridge**: `AppResponse` with `ResponseAction` (.allow/.deny/.chooseOption)
-- Payload types use `tool` (not `toolName`) for the tool name field
+- **Bridge → App**: `BridgeCommand.processClaudeHook(ClaudeHookPayload)` — forwards Claude Code's native JSON payload directly
+- **App → Bridge**: `BridgeResponse.claudeHookDirective(ClaudeHookDirective)` for permission decisions, or `.acknowledged` for fire-and-forget events
+- The bridge decodes Claude's native `ClaudeHookPayload` (with `hook_event_name`, `session_id`, `tool_name`, `permission_suggestions`, etc.) and forwards it unchanged
+- Permission responses use Claude Code's native format: `{"continue":true,"suppressOutput":true,"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedPermissions":[...]}}}`
 
 ### Main App Modules
 
@@ -51,19 +52,23 @@ Communication between bridge and app uses **NDJSON** (newline-delimited JSON) ov
 ### Data Flow
 
 ```
-AI Tool (Claude Code, Codex, etc.)
-  → Hook fires → aibridge CLI → Unix socket → SocketServer
-  → BridgeMessage parsed → AppState updated → IslandMode changes
-  → SwiftUI views react → User clicks Allow/Deny or option
-  → AppResponse sent back through socket → aibridge exits with code
-  → AI Tool proceeds or blocks
+Claude Code (hook fires on 14 events)
+  → aibridge CLI (reads stdin JSON, decodes ClaudeHookPayload)
+    → Unix socket → SocketServer → SocketConnection
+      → AppState.dispatch(BridgeCommand) → handleClaudeHook()
+        → SwiftUI views react → User clicks Allow/Deny/suggestion button
+          → BridgeResponse.claudeHookDirective sent back through socket
+            → aibridge writes hookSpecificOutput JSON to stdout
+              → Claude Code reads response and proceeds
 ```
 
 ### Key Design Decisions
 
 - **Non-activating panel**: Uses `NSPanel` with `.nonactivatingPanel` style mask so the overlay never steals focus from editors/terminals. Level is `.statusBar + 1`.
-- **Flat event enum + separate payload**: `AgentEvent` is a String-based enum for wire compatibility. Typed payloads are in the separate `MessagePayload` enum.
-- **Fire-and-forget vs blocking**: Most events (tool_use, status, session_start/end) are fire-and-forget. Only `permission_request` and `ask` block the bridge waiting for a response.
+- **Native Claude payload passthrough**: The bridge decodes Claude Code's native `ClaudeHookPayload` and forwards it to the app unchanged. No re-interpretation or event type mapping.
+- **14 hook events**: SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest (24h timeout), PermissionDenied, Notification, Stop, StopFailure, SubagentStart, SubagentStop, PreCompact.
+- **Rich permission options**: Claude Code sends `permission_suggestions` (typed `ClaudePermissionUpdate` values) with PermissionRequest hooks. These render as additional buttons beyond Allow/Deny (e.g., "Always allow Bash for this session").
+- **Fire-and-forget vs blocking**: Only `PermissionRequest` blocks the bridge waiting for a response (24h timeout). All other events get an `.acknowledged` response.
 - **Terminal jump**: Each terminal has its own adapter. iTerm2 uses AppleScript, Kitty uses `kitty @` remote control, others mostly just activate the app.
 
 ### Design Tokens
@@ -73,3 +78,8 @@ AI Tool (Claude Code, Codex, etc.)
 - Status colors: blue=working, green=idle, orange=waiting, red=error
 - Corner radius: 19 for panel, 12 for cards, 8 for badges
 - Font: system for UI, monospaced for code/diffs
+
+## Git Commit Guidelines
+
+- **DO NOT** include Claude attribution or co-authored-by information in commit messages
+- Keep commit messages clean and professional without AI tool references

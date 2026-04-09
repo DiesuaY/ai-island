@@ -9,7 +9,7 @@ final class SocketConnection {
     private var buffer = Data()
     private var didDisconnect = false
 
-    var onMessage: ((BridgeMessage) -> Void)?
+    var onCommand: ((BridgeCommand) -> Void)?
     var onDisconnect: (() -> Void)?
 
     init(connection: NWConnection, queue: DispatchQueue) {
@@ -66,7 +66,7 @@ final class SocketConnection {
         }
     }
 
-    /// Split buffer on newlines (NDJSON) and decode each complete line
+    /// Split buffer on newlines (NDJSON) and decode each complete line as BridgeCommand
     private func processBuffer() {
         let newline = UInt8(0x0A)
 
@@ -77,10 +77,10 @@ final class SocketConnection {
             guard !lineData.isEmpty else { continue }
 
             do {
-                let message = try ProtocolCodec.decode(Data(lineData))
-                onMessage?(message)
+                let command = try BridgeCodec.decodeCommand(from: Data(lineData))
+                onCommand?(command)
             } catch {
-                NSLog("[AIIsland] Failed to decode message: \(error)")
+                NSLog("[AIIsland] Failed to decode command: \(error)")
                 if let line = String(data: Data(lineData), encoding: .utf8) {
                     NSLog("[AIIsland] Raw line: \(line.prefix(200))")
                 }
@@ -104,9 +104,9 @@ final class SocketConnection {
         })
     }
 
-    func sendResponse(_ response: AppResponse) {
+    func sendResponse(_ response: BridgeResponse) {
         do {
-            let data = try ProtocolCodec.encodeLine(response)
+            let data = try BridgeCodec.encodeResponse(response)
             sendData(data)
         } catch {
             NSLog("[AIIsland] Failed to encode response: \(error)")
