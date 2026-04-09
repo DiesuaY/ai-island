@@ -131,9 +131,25 @@ private func parseEvent(
         return (.permissionRequest, .permissionRequest(p))
 
     case "ask":
+        var question = json?["question"] as? String ?? ""
+        var options = json?["options"] as? [String]
+
+        // Extract from AskUserQuestion tool_input (PreToolUse hook format)
+        if question.isEmpty, let toolInput = json?["tool_input"] as? [String: Any] {
+            if let questions = toolInput["questions"] as? [[String: Any]], let first = questions.first {
+                question = first["question"] as? String ?? ""
+                // Options are objects with "label" and "description"
+                if let opts = first["options"] as? [[String: Any]] {
+                    options = opts.map { opt in
+                        opt["label"] as? String ?? opt["description"] as? String ?? "?"
+                    }
+                }
+            }
+        }
+
         let p = AskPromptPayload(
-            question: json?["question"] as? String ?? "",
-            options: json?["options"] as? [String]
+            question: question,
+            options: options
         )
         return (.ask, .ask(p))
 
@@ -297,21 +313,33 @@ struct AIBridge {
         // Extract cwd from stdin JSON (Claude Code sends it on every hook event)
         let workingDirectory = stdinJson?["cwd"] as? String
 
+        // Subagent detection: Claude Code includes "agent_id" in hook JSON for subagent tool calls.
+        // Auto-approve subagent permission requests — only main agent needs manual approval.
+        let isSubagent = stdinJson?["agent_id"] != nil
+
         // Auto-upgrade tool_use to permission_request when Claude Code requires approval.
         // Claude Code sends permission_mode in stdin JSON:
         //   "default" = user must approve dangerous tools
         //   "acceptEdits" = auto-approve edits, ask for Bash
         // For these modes, upgrade to permission_request so the panel shows Allow/Deny.
+        // Skip upgrade for subagent calls — they get auto-approved.
         var effectiveEvent = cli.event
-        if cli.event == "tool_use" {
-            let permMode = stdinJson?["permission_mode"] as? String ?? ""
+        if cli.event == "tool_use" && !isSubagent {
             let toolName = stdinJson?["tool_name"] as? String ?? ""
-            let dangerousTools = ["Bash", "Write", "Edit", "NotebookEdit"]
 
-            if permMode == "default" && dangerousTools.contains(toolName) {
-                effectiveEvent = "permission_request"
-            } else if permMode == "acceptEdits" && toolName == "Bash" {
-                effectiveEvent = "permission_request"
+            // Convert AskUserQuestion to "ask" event so island shows options.
+            // This is fire-and-forget — the island responds via terminal keystroke.
+            if toolName == "AskUserQuestion" {
+                effectiveEvent = "ask"
+            } else {
+                let permMode = stdinJson?["permission_mode"] as? String ?? ""
+                let dangerousTools = ["Bash", "Write", "Edit", "NotebookEdit"]
+
+                if permMode == "default" && dangerousTools.contains(toolName) {
+                    effectiveEvent = "permission_request"
+                } else if permMode == "acceptEdits" && toolName == "Bash" {
+                    effectiveEvent = "permission_request"
+                }
             }
         }
 
@@ -366,10 +394,14 @@ struct AIBridge {
         }
 
         // Determine if we need to wait for a response
+        // AskUserQuestion "ask" events are fire-and-forget — island responds via terminal keystroke
+        let isAskFromTool = effectiveEvent == "ask" && (stdinJson?["tool_name"] as? String) == "AskUserQuestion"
         let needsResponse: Bool = {
             switch effectiveEvent {
-            case "permission_request", "ask":
+            case "permission_request":
                 return true
+            case "ask":
+                return !isAskFromTool  // Only block for native ask events, not tool-intercepted ones
             default:
                 return false
             }

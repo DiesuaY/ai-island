@@ -11,7 +11,6 @@ final class IslandPanelController {
     private let collapsedHeight: CGFloat = DesignTokens.pillHeight
     private let monitorHeight: CGFloat = 280
     private let approveHeight: CGFloat = 360
-    private let askHeight: CGFloat = 200
 
     private var modeObservation: Any?
 
@@ -91,10 +90,9 @@ final class IslandPanelController {
             panel.orderFrontRegardless()
         case .ask:
             let optionCount = CGFloat(appState.pendingQuestion?.options.count ?? 0)
-            // Free-form (0 options) needs space for text field; options need 40px each
-            let contentHeight: CGFloat = optionCount == 0 ? 120 : (80 + optionCount * 40)
-            let height = min(askHeight, contentHeight)
-            animateFrame(width: DesignTokens.panelWidth, height: height, cornerRadius: DesignTokens.panelRadius, duration: 0.3)
+            // Header ~50px + question ~50px + options 44px each + padding 20px
+            let contentHeight: CGFloat = optionCount == 0 ? 160 : (120 + optionCount * 44)
+            animateFrame(width: DesignTokens.approveWidth, height: contentHeight, cornerRadius: DesignTokens.panelRadius, duration: 0.3)
             panel.makeKey()
             panel.orderFrontRegardless()
         case .jump:

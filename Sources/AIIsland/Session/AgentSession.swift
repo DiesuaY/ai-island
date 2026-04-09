@@ -15,6 +15,9 @@ public final class AgentSession: Identifiable {
     public var lastActivity: Date
     public var tokenCount: Int
     public var petSpecies: PetSpecies
+    /// Tracks nesting depth of Agent tool calls. When > 0, permission requests
+    /// are from subagents and should be auto-approved.
+    public var subagentDepth: Int
 
     public init(
         id: String,
@@ -28,7 +31,8 @@ public final class AgentSession: Identifiable {
         workingDirectory: String = "",
         lastActivity: Date = Date(),
         tokenCount: Int = 0,
-        petSpecies: PetSpecies = .random()
+        petSpecies: PetSpecies = .random(),
+        subagentDepth: Int = 0
     ) {
         self.id = id
         self.agent = agent
@@ -42,6 +46,7 @@ public final class AgentSession: Identifiable {
         self.lastActivity = lastActivity
         self.tokenCount = tokenCount
         self.petSpecies = petSpecies
+        self.subagentDepth = subagentDepth
     }
 
     /// Display name: first ~40 chars of prompt, or directory basename
