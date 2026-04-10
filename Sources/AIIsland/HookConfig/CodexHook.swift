@@ -28,8 +28,7 @@ struct CodexHook: HookConfigurator {
         configDir.map { $0 + "/config.json" }
     }
 
-    /// Marker to identify hooks installed by AI Island.
-    private static let hookMarker = "aibridge"
+    private static let hookMarker = AIIslandConstants.hookMarker
 
     // MARK: - HookConfigurator
 

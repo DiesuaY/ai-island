@@ -274,7 +274,7 @@ public enum ClaudeSessionStartSource: String, Codable, Sendable {
 // MARK: - Claude Hook Payload (the JSON Claude Code sends to hook stdin)
 
 public struct ClaudeHookPayload: Equatable, Codable, Sendable {
-    public var cwd: String
+    public var cwd: String?
     public var hookEventName: ClaudeHookEventName
     public var sessionID: String
     public var transcriptPath: String?
@@ -661,6 +661,7 @@ public extension ClaudeHookPayload {
 
     /// Workspace name derived from cwd.
     var workspaceName: String {
-        URL(fileURLWithPath: cwd).lastPathComponent
+        guard let cwd else { return "" }
+        return URL(fileURLWithPath: cwd).lastPathComponent
     }
 }

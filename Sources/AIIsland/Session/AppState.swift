@@ -161,7 +161,7 @@ public final class AppState {
                 startTime: Date(),
                 terminalPid: nil,
                 terminalApp: payload.terminalApp,
-                workingDirectory: payload.cwd,
+                workingDirectory: payload.cwd ?? "",
                 lastActivity: Date()
             )
             sessions[sid] = session
@@ -314,8 +314,8 @@ public final class AppState {
             if existing.terminalApp == nil, let app = payload.terminalApp {
                 existing.terminalApp = app
             }
-            if existing.workingDirectory.isEmpty {
-                existing.workingDirectory = payload.cwd
+            if existing.workingDirectory.isEmpty, let cwd = payload.cwd {
+                existing.workingDirectory = cwd
             }
             return
         }
@@ -327,7 +327,7 @@ public final class AppState {
             startTime: Date(),
             terminalPid: nil,
             terminalApp: payload.terminalApp,
-            workingDirectory: payload.cwd,
+            workingDirectory: payload.cwd ?? "",
             lastActivity: Date()
         )
         sessions[sid] = session

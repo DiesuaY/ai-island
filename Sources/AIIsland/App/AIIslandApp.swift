@@ -11,8 +11,9 @@ struct AIIslandMain {
     static func main() {
         let app = NSApplication.shared
 
-        // Configure as agent app (no dock icon)
-        app.setActivationPolicy(.accessory)
+        // Respect dock icon preference; default is .accessory (no dock icon)
+        let policy: NSApplication.ActivationPolicy = IslandSettings.shared.showDockIcon ? .regular : .accessory
+        app.setActivationPolicy(policy)
 
         app.delegate = appDelegate
         app.run()

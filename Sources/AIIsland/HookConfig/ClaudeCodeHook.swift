@@ -20,8 +20,7 @@ struct ClaudeCodeHook: HookConfigurator {
         configDir + "/settings.json"
     }
 
-    /// Marker to identify hooks installed by AI Island.
-    private static let hookMarker = "aibridge"
+    private static let hookMarker = AIIslandConstants.hookMarker
 
     /// Permission request hooks get 24 hours for user response.
     private static let permissionTimeout = 86_400
@@ -47,21 +46,7 @@ struct ClaudeCodeHook: HookConfigurator {
     // MARK: - HookConfigurator
 
     func isInstalled() -> Bool {
-        if FileManager.default.fileExists(atPath: configDir) {
-            return true
-        }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = ["claude"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch {
-            return false
-        }
+        FileManager.default.fileExists(atPath: configDir) || ShellUtils.which("claude") != nil
     }
 
     func installHook() throws {

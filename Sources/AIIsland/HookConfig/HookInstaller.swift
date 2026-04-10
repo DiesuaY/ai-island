@@ -24,12 +24,23 @@ final class HookInstaller {
 
     // MARK: - Public API
 
+    /// Controls how aggressively hooks are installed.
+    enum InstallMode {
+        /// Only re-installs if hook version changed or a new tool is detected.
+        case incremental
+        /// Re-installs for all detected tools, skipping version check.
+        case forceReinstall
+        /// Creates configs even for tools that aren't installed yet.
+        case bootstrap
+    }
+
     /// Install hooks for all detected AI tools.
-    /// Only re-installs if the hook version has changed or a new tool is detected.
-    static func installAll(force: Bool = false) {
+    /// Returns true if all installations succeeded.
+    @discardableResult
+    static func installAll(mode: InstallMode = .incremental) -> Bool {
         let previousVersion = UserDefaults.standard.integer(forKey: Keys.installedHooksVersion)
         let previousTools = Set(UserDefaults.standard.stringArray(forKey: Keys.installedTools) ?? [])
-        let needsReinstall = force || previousVersion < hookVersion
+        let needsReinstall = mode != .incremental || previousVersion < hookVersion
 
         var installedTools: [String] = []
         var allSucceeded = true
@@ -37,8 +48,7 @@ final class HookInstaller {
         for configurator in configurators {
             let toolName = configurator.toolName
 
-            // When force is true, skip the isInstalled() check to allow bootstrapping fresh configs
-            if !force {
+            if mode != .bootstrap {
                 guard configurator.isInstalled() else {
                     logger.info("\(toolName) not detected, skipping hook installation")
                     continue
@@ -69,6 +79,7 @@ final class HookInstaller {
         UserDefaults.standard.set(installedTools, forKey: Keys.installedTools)
 
         logger.info("Hook installation complete. Installed: \(installedTools.joined(separator: ", "))")
+        return allSucceeded
     }
 
     /// Remove all installed hooks.

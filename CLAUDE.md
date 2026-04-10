@@ -18,6 +18,13 @@ swift test                           # Run tests
 
 Binaries land in `.build/debug/` or `.build/release/`.
 
+To update the installed app after building:
+
+```bash
+cp .build/release/aibridge /Applications/AIIsland.app/Contents/MacOS/aibridge
+cp .build/release/AIIsland /Applications/AIIsland.app/Contents/MacOS/AIIsland
+```
+
 ## Architecture
 
 ### Three Targets (Package.swift)
@@ -34,7 +41,7 @@ Communication between bridge and app uses **NDJSON** (newline-delimited JSON) ov
 
 - **Bridge → App**: `BridgeCommand.processClaudeHook(ClaudeHookPayload)` — forwards Claude Code's native JSON payload directly
 - **App → Bridge**: `BridgeResponse.claudeHookDirective(ClaudeHookDirective)` for permission decisions, or `.acknowledged` for fire-and-forget events
-- The bridge decodes Claude's native `ClaudeHookPayload` (with `hook_event_name`, `session_id`, `tool_name`, `permission_suggestions`, etc.) and forwards it unchanged
+- The bridge decodes Claude's native `ClaudeHookPayload` (with `hook_event_name`, `session_id`, optional `cwd`, `tool_name`, `permission_suggestions`, etc.) and forwards it unchanged
 - Permission responses use Claude Code's native format: `{"continue":true,"suppressOutput":true,"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedPermissions":[...]}}}`
 
 ### Main App Modules
@@ -47,6 +54,7 @@ Communication between bridge and app uses **NDJSON** (newline-delimited JSON) ov
 - **Audio/** — AVAudioEngine chiptune synthesizer, event-to-sound mapping
 - **Terminal/** — Protocol-based adapters for jumping to exact tab/pane (iTerm2 via AppleScript, Kitty via remote control, etc.)
 - **HookConfig/** — Auto-installs hook entries into AI tool config files (Claude Code settings.json, Codex, Gemini)
+- **Usage/** — Context window and rate limit monitoring — reads Claude Code's cache files, models, and bar/dot views
 - **Util/** — Screen geometry (notch detection), accessibility permissions
 
 ### Data Flow

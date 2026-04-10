@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import ServiceManagement
 
 /// Persisted app settings, saved to ~/Library/Preferences/com.aiisland.settings.json
 @Observable
@@ -6,9 +8,34 @@ final class IslandSettings {
 
     // MARK: - Persisted Properties
 
-    var soundEnabled: Bool = true { didSet { save() } }
-    var autoHideEnabled: Bool = false { didSet { save() } }
-    var autoHideSeconds: Int = 10 { didSet { save() } }
+    /// Guards against side effects during init/load.
+    private var isInitialized = false
+    /// Guards against infinite re-entry when reverting a failed login item change.
+    private var isRevertingLoginItem = false
+
+    var soundEnabled: Bool = true { didSet { if isInitialized { save() } } }
+    var autoHideEnabled: Bool = false { didSet { if isInitialized { save() } } }
+    var autoHideSeconds: Int = 10 { didSet { if isInitialized { save() } } }
+    var showDockIcon: Bool = false {
+        didSet {
+            guard isInitialized, showDockIcon != oldValue else { return }
+            save()
+            NSApp.setActivationPolicy(showDockIcon ? .regular : .accessory)
+            if !showDockIcon {
+                // macOS doesn't immediately refresh the Dock when switching to .accessory.
+                // Briefly hiding forces the Dock to drop the icon.
+                NSApp.hide(nil)
+                DispatchQueue.main.async { NSApp.unhide(nil) }
+            }
+        }
+    }
+    var launchAtLogin: Bool = false {
+        didSet {
+            guard isInitialized, launchAtLogin != oldValue else { return }
+            save()
+            updateLoginItem()
+        }
+    }
 
     // MARK: - Init
 
@@ -22,6 +49,31 @@ final class IslandSettings {
 
     private init() {
         load()
+        // System is the source of truth — the user may have toggled login items
+        // in System Settings while the app was not running, so override the persisted value.
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+        isInitialized = true
+    }
+
+    // MARK: - Login Item
+
+    private func updateLoginItem() {
+        guard !isRevertingLoginItem else { return }
+        do {
+            if launchAtLogin {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            // If registration fails, revert the setting without re-triggering updateLoginItem
+            let current = SMAppService.mainApp.status == .enabled
+            if current != launchAtLogin {
+                isRevertingLoginItem = true
+                launchAtLogin = current
+                isRevertingLoginItem = false
+            }
+        }
     }
 
     // MARK: - Persistence
@@ -30,6 +82,8 @@ final class IslandSettings {
         var soundEnabled: Bool = true
         var autoHideEnabled: Bool = false
         var autoHideSeconds: Int = 10
+        var showDockIcon: Bool = false
+        var launchAtLogin: Bool = false
     }
 
     private func load() {
@@ -40,13 +94,17 @@ final class IslandSettings {
         soundEnabled = decoded.soundEnabled
         autoHideEnabled = decoded.autoHideEnabled
         autoHideSeconds = decoded.autoHideSeconds
+        showDockIcon = decoded.showDockIcon
+        launchAtLogin = decoded.launchAtLogin
     }
 
     private func save() {
         let data = SettingsData(
             soundEnabled: soundEnabled,
             autoHideEnabled: autoHideEnabled,
-            autoHideSeconds: autoHideSeconds
+            autoHideSeconds: autoHideSeconds,
+            showDockIcon: showDockIcon,
+            launchAtLogin: launchAtLogin
         )
         guard let encoded = try? JSONEncoder().encode(data) else { return }
         try? encoded.write(to: fileURL, options: .atomic)

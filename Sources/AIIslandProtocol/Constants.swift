@@ -19,6 +19,9 @@ public enum AIIslandConstants {
 
     public static let bridgeBinaryName: String = "aibridge"
 
+    /// Marker string used to identify AI Island hooks in config files.
+    public static let hookMarker: String = bridgeBinaryName
+
     /// Whether the process is running from inside a .app bundle.
     public static var isRunningFromAppBundle: Bool {
         Bundle.main.bundlePath.hasSuffix(".app")
