@@ -17,6 +17,7 @@ final class IslandPanelController {
     private var modeObservation: Any?
     private var screenObserver: Any?
     private var autoHideTimer: Timer?
+    private var settingsObservation: Any?
 
     init(appState: AppState, settings: IslandSettings = .shared) {
         self.appState = appState
@@ -36,6 +37,7 @@ final class IslandPanelController {
         positionPanel()
         startModeObservation()
         observeScreenChanges()
+        observeScreenPreference()
     }
 
     // MARK: - Public
@@ -157,19 +159,32 @@ final class IslandPanelController {
         return screen.safeAreaInsets.top
     }
 
-    /// Calculates the panel's target screen. Uses the screen containing the panel's
-    /// current center point, falling back to ScreenGeometry.activeScreen().
+    /// Resolves the target screen for the panel.
+    /// Priority: user-selected screen > auto-detect (notch screen > main screen > first screen).
     private func targetScreen() -> NSScreen? {
-        let panelCenter = NSPoint(
-            x: panel.frame.midX,
-            y: panel.frame.midY
-        )
-        for screen in NSScreen.screens {
-            if screen.frame.contains(panelCenter) {
-                return screen
+        // If user has selected a specific screen, try to use it
+        if let selected = DisplayOption.resolveScreen(for: settings.preferredScreenID) {
+            return selected
+        }
+        // Auto: prefer a notch screen, then main, then first
+        if let notchScreen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) {
+            return notchScreen
+        }
+        return NSScreen.main ?? NSScreen.screens.first
+    }
+
+    /// Observe changes to the preferred screen setting.
+    private var lastPreferredScreenID: String = ""
+
+    private func observeScreenPreference() {
+        lastPreferredScreenID = settings.preferredScreenID
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.settings.preferredScreenID != self.lastPreferredScreenID {
+                self.lastPreferredScreenID = self.settings.preferredScreenID
+                self.handleModeChange() // Reposition panel on the new screen
             }
         }
-        return ScreenGeometry.activeScreen()
     }
 
     private func positionPanel() {

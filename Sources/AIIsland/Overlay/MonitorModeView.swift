@@ -131,6 +131,36 @@ struct MonitorModeView: View {
                         .foregroundStyle(DesignTokens.textSecondary)
                 }
             }
+
+            // Active subagents
+            if !session.activeSubagents.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.cyan)
+                    Text("Subagents (\(session.activeSubagents.count))")
+                        .font(DesignTokens.badgeFont)
+                        .foregroundStyle(.cyan)
+                }
+
+                ForEach(session.activeSubagents) { sub in
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(.blue)
+                            .frame(width: 5, height: 5)
+                        Text(sub.taskDescription ?? sub.agentType ?? sub.id)
+                            .font(DesignTokens.codeFont)
+                            .foregroundStyle(DesignTokens.textSecondary)
+                            .lineLimit(1)
+                    }
+                    .padding(.leading, 14)
+                }
+            }
+
+            // Active tasks
+            if !session.activeTasks.isEmpty {
+                taskProgressView(session.activeTasks)
+            }
         }
         .padding(10)
         .background(Color.white.opacity(0.06))
@@ -138,6 +168,52 @@ struct MonitorModeView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             appState.jumpToSession(session)
+        }
+    }
+
+    // MARK: - Task Progress
+
+    private func taskProgressView(_ tasks: [TaskInfo]) -> some View {
+        let completed = tasks.filter { $0.status == .completed }.count
+        let total = tasks.count
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Image(systemName: "checklist")
+                    .font(.system(size: 10))
+                    .foregroundStyle(DesignTokens.textSecondary)
+                Text("\(completed)/\(total) tasks done")
+                    .font(DesignTokens.badgeFont)
+                    .foregroundStyle(DesignTokens.textSecondary)
+            }
+            ForEach(tasks) { task in
+                HStack(spacing: 4) {
+                    Image(systemName: taskIcon(task.status))
+                        .font(.system(size: 9))
+                        .foregroundStyle(taskColor(task.status))
+                    Text(task.title)
+                        .font(DesignTokens.codeFont)
+                        .foregroundStyle(DesignTokens.textSecondary)
+                        .lineLimit(1)
+                        .strikethrough(task.status == .completed)
+                }
+                .padding(.leading, 14)
+            }
+        }
+    }
+
+    private func taskIcon(_ status: TaskInfo.TaskStatus) -> String {
+        switch status {
+        case .pending: return "circle"
+        case .inProgress: return "circle.lefthalf.filled"
+        case .completed: return "checkmark.circle.fill"
+        }
+    }
+
+    private func taskColor(_ status: TaskInfo.TaskStatus) -> Color {
+        switch status {
+        case .pending: return DesignTokens.textSecondary
+        case .inProgress: return .blue
+        case .completed: return .green
         }
     }
 

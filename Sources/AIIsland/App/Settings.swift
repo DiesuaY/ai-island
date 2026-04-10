@@ -16,6 +16,9 @@ final class IslandSettings {
     var soundEnabled: Bool = true { didSet { if isInitialized { save() } } }
     var autoHideEnabled: Bool = false { didSet { if isInitialized { save() } } }
     var autoHideSeconds: Int = 10 { didSet { if isInitialized { save() } } }
+
+    /// Preferred screen for the overlay panel. Empty string = auto (notch screen or main screen).
+    var preferredScreenID: String = "" { didSet { if isInitialized { save() } } }
     var showDockIcon: Bool = false {
         didSet {
             guard isInitialized, showDockIcon != oldValue else { return }
@@ -84,6 +87,7 @@ final class IslandSettings {
         var autoHideSeconds: Int = 10
         var showDockIcon: Bool = false
         var launchAtLogin: Bool = false
+        var preferredScreenID: String = ""
     }
 
     private func load() {
@@ -96,6 +100,7 @@ final class IslandSettings {
         autoHideSeconds = decoded.autoHideSeconds
         showDockIcon = decoded.showDockIcon
         launchAtLogin = decoded.launchAtLogin
+        preferredScreenID = decoded.preferredScreenID
     }
 
     private func save() {
@@ -104,7 +109,8 @@ final class IslandSettings {
             autoHideEnabled: autoHideEnabled,
             autoHideSeconds: autoHideSeconds,
             showDockIcon: showDockIcon,
-            launchAtLogin: launchAtLogin
+            launchAtLogin: launchAtLogin,
+            preferredScreenID: preferredScreenID
         )
         guard let encoded = try? JSONEncoder().encode(data) else { return }
         try? encoded.write(to: fileURL, options: .atomic)

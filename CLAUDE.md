@@ -33,7 +33,7 @@ cp .build/release/AIIsland /Applications/AIIsland.app/Contents/MacOS/AIIsland
 
 2. **AIBridge** (CLI executable `aibridge`) — Lightweight binary invoked by AI tool hook scripts. Reads event JSON from stdin, connects to `~/.aiisland/island.sock` Unix domain socket, sends an NDJSON message, and for permission/ask events blocks until it receives a response. Must start in <10ms. Exits silently on socket errors (never breaks the agent).
 
-3. **AIIsland** (macOS app executable) — The main overlay app. Runs as an agent app (no dock icon, menu bar only). Listens on the Unix socket, manages sessions, and renders the Dynamic Island panel.
+3. **AIIsland** (macOS app executable) — The main overlay app. Runs as an agent app (menu bar only by default, dock icon optional via Settings). Listens on the Unix socket, manages sessions, and renders the Dynamic Island panel. Supports launch at login via SMAppService.
 
 ### Wire Protocol
 
@@ -48,14 +48,14 @@ Communication between bridge and app uses **NDJSON** (newline-delimited JSON) ov
 
 - **App/** — Entry point (`@main`), `AppDelegate` (menu bar, keyboard shortcuts, lifecycle), `AppState` (central @Observable state)
 - **Socket/** — `SocketServer` (NWListener on Unix socket), `SocketConnection` (per-connection handler with NDJSON framing)
-- **Session/** — `AgentSession` model, `SessionManager` (lifecycle, timeouts), `SessionStatus`, `IslandMode` enum
+- **Session/** — `AgentSession` model (with `SubagentInfo`, `TaskInfo`, `isDiscovered`), `SessionManager` (lifecycle, timeouts, 24h grace for discovered sessions), `SessionDiscovery` (JSONL transcript scanner for launch-time recovery), `SessionStatus`, `IslandMode` enum
 - **Overlay/** — `IslandPanel` (non-activating NSPanel), `IslandPanelController` (positioning at notch, expand/collapse animations), SwiftUI views for each mode (Idle, Monitor, Approve, Ask)
 - **PixelPet/** — 8x8 pixel art creatures with species enum, SwiftUI renderer, frame animator
 - **Audio/** — AVAudioEngine chiptune synthesizer, event-to-sound mapping
 - **Terminal/** — Protocol-based adapters for jumping to exact tab/pane (iTerm2 via AppleScript, Kitty via remote control, etc.)
-- **HookConfig/** — Auto-installs hook entries into AI tool config files (Claude Code settings.json, Codex, Gemini)
+- **HookConfig/** — Auto-installs hook entries into AI tool config files (Claude Code settings.json, Codex, Gemini). Includes `HookHealthCheck` for validating binary, config JSON, and stale paths per tool, with per-agent config schema awareness.
 - **Usage/** — Context window and rate limit monitoring — reads Claude Code's cache files, models, and bar/dot views
-- **Util/** — Screen geometry (notch detection), accessibility permissions
+- **Util/** — Screen geometry (notch detection), accessibility permissions, `ShellUtils` (login-shell PATH resolution for GUI apps), `DisplayOption` (multi-monitor screen enumeration and selection), `DesignTokens`
 
 ### Data Flow
 
@@ -78,6 +78,12 @@ Claude Code (hook fires on 14 events)
 - **Rich permission options**: Claude Code sends `permission_suggestions` (typed `ClaudePermissionUpdate` values) with PermissionRequest hooks. These render as additional buttons beyond Allow/Deny (e.g., "Always allow Bash for this session").
 - **Fire-and-forget vs blocking**: Only `PermissionRequest` blocks the bridge waiting for a response (24h timeout). All other events get an `.acknowledged` response.
 - **Terminal jump**: Each terminal has its own adapter. iTerm2 uses AppleScript, Kitty uses `kitty @` remote control, others mostly just activate the app.
+- **Hook health checks**: `HookHealthCheck` validates aibridge binary existence, config JSON validity, stale command paths, and third-party hook coexistence. Each tool (Claude, Codex, Gemini) has its own config schema parser. Repair re-installs hooks for detected tools only.
+- **InstallMode enum**: `HookInstaller.installAll(mode:)` uses `.incremental` (default on launch), `.forceReinstall` (repair), or `.bootstrap` (Settings "Install" button — creates configs even for undetected tools).
+- **Multi-monitor support**: `DisplayOption` enumerates screens via `NSScreen.screens`, generates stable IDs from `NSScreenNumber`. `IslandPanelController.targetScreen()` resolves: user-selected screen > notch screen > main screen. Settings persists `preferredScreenID`.
+- **Subagent tracking**: `PreToolUse(Agent)` descriptions are cached in a per-session FIFO queue. `SubagentStart` pops the oldest description. This is best-effort — Claude Code's hook protocol has no correlation ID between PreToolUse and SubagentStart.
+- **Task visualization**: `PostToolUse` for `TaskCreate`/`TaskUpdate` tools updates `AgentSession.activeTasks`. Fallback matching uses title + FIFO when the tool response omits a task ID.
+- **Session discovery**: On launch, `SessionDiscovery` scans `~/.claude/projects/` for JSONL transcripts modified within 24h. Discovered sessions merge without overwriting live socket sessions and get a 24h expiration grace period.
 
 ### Design Tokens
 

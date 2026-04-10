@@ -34,8 +34,10 @@ final class SessionManager {
             guard session.status != .waitingApproval,
                   session.status != .waitingAnswer else { return nil }
 
+            // Discovered sessions use the same 24h window as the transcript scan
+            let timeout = session.isDiscovered ? (24 * 60 * 60) : expirationInterval
             let inactive = now.timeIntervalSince(session.lastActivity)
-            return inactive > expirationInterval ? id : nil
+            return inactive > timeout ? id : nil
         }
 
         for id in staleIds {

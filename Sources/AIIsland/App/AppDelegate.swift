@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupIslandPanel()
         startSocketServer()
         runHookInstallerIfNeeded()
+        appState.runSessionDiscovery()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

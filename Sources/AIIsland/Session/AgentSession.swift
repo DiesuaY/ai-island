@@ -1,6 +1,38 @@
 import Foundation
 import AIIslandProtocol
 
+/// Info about an active subagent within a session.
+public struct SubagentInfo: Identifiable {
+    public let id: String           // agentID from the hook payload
+    public var agentType: String?   // e.g., "claude-code", "codex"
+    public var taskDescription: String?
+    public let startedAt: Date
+
+    public init(id: String, agentType: String? = nil, taskDescription: String? = nil, startedAt: Date = Date()) {
+        self.id = id
+        self.agentType = agentType
+        self.taskDescription = taskDescription
+        self.startedAt = startedAt
+    }
+}
+
+/// Info about a tracked task within a session.
+public struct TaskInfo: Identifiable {
+    public let id: String
+    public var title: String
+    public var status: TaskStatus
+
+    public enum TaskStatus: String {
+        case pending, inProgress = "in_progress", completed
+    }
+
+    public init(id: String, title: String, status: TaskStatus = .pending) {
+        self.id = id
+        self.title = title
+        self.status = status
+    }
+}
+
 @Observable
 public final class AgentSession: Identifiable {
     public let id: String
@@ -16,6 +48,18 @@ public final class AgentSession: Identifiable {
     public var tokenCount: Int
     public var petSpecies: PetSpecies
 
+    /// Active subagents spawned by this session.
+    public var activeSubagents: [SubagentInfo] = []
+
+    /// Tracked tasks in this session.
+    public var activeTasks: [TaskInfo] = []
+
+    /// Whether this session was discovered from transcript files (vs. live socket).
+    public var isDiscovered: Bool = false
+
+    /// Transcript path from the hook payload.
+    public var transcriptPath: String?
+
     public init(
         id: String,
         agent: AgentType = .claude,
@@ -28,7 +72,9 @@ public final class AgentSession: Identifiable {
         workingDirectory: String = "",
         lastActivity: Date = Date(),
         tokenCount: Int = 0,
-        petSpecies: PetSpecies = .random()
+        petSpecies: PetSpecies = .random(),
+        isDiscovered: Bool = false,
+        transcriptPath: String? = nil
     ) {
         self.id = id
         self.agent = agent
@@ -42,6 +88,8 @@ public final class AgentSession: Identifiable {
         self.lastActivity = lastActivity
         self.tokenCount = tokenCount
         self.petSpecies = petSpecies
+        self.isDiscovered = isDiscovered
+        self.transcriptPath = transcriptPath
     }
 
     /// Display name: first ~40 chars of prompt, or directory basename

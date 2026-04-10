@@ -33,6 +33,29 @@ struct SessionRowView: View {
                 .background(agentColor(session.agent).opacity(0.15))
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.badgeRadius))
 
+            // Subagent count badge
+            if !session.activeSubagents.isEmpty {
+                HStack(spacing: 2) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 9))
+                    Text("\(session.activeSubagents.count)")
+                        .font(DesignTokens.badgeFont)
+                }
+                .foregroundStyle(.cyan)
+            }
+
+            // Task progress badge
+            if !session.activeTasks.isEmpty {
+                let done = session.activeTasks.filter { $0.status == .completed }.count
+                HStack(spacing: 2) {
+                    Image(systemName: "checklist")
+                        .font(.system(size: 9))
+                    Text("\(done)/\(session.activeTasks.count)")
+                        .font(DesignTokens.badgeFont)
+                }
+                .foregroundStyle(DesignTokens.textSecondary)
+            }
+
             // Terminal badge (if has PID)
             if session.terminalPid != nil {
                 Image(systemName: "terminal")
@@ -55,6 +78,7 @@ struct SessionRowView: View {
         .padding(.vertical, 7)
         .background(Color.white.opacity(0.03))
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.cardRadius))
+        .opacity(session.isDiscovered ? 0.7 : 1.0)
         .contentShape(Rectangle())
         .onTapGesture {
             appState.jumpToSession(session)

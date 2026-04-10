@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var healthReports: [HookHealthReport] = []
     @State private var isRunningHealthCheck = false
     @State private var repairResult: (message: String, succeeded: Bool)?
+    @State private var displayOptions: [DisplayOption] = DisplayOption.allScreenOptions()
 
     private let secondsOptions = [5, 10, 15, 20, 30, 60]
 
@@ -40,6 +41,34 @@ struct SettingsView: View {
                     Text("When disabled, AI Island runs as a menu bar app only.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+
+                    Divider()
+
+                    // MARK: - Display
+                    sectionHeader("Display")
+
+                    Picker("Target Screen", selection: $settings.preferredScreenID) {
+                        ForEach(displayOptions) { option in
+                            HStack {
+                                Text(option.title)
+                                if !option.subtitle.isEmpty {
+                                    Text("— \(option.subtitle)")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .tag(option.id)
+                        }
+                    }
+
+                    Button("Refresh Screens") {
+                        displayOptions = DisplayOption.allScreenOptions()
+                    }
+                    .controlSize(.small)
+
+                    Text("Choose which screen to display the island overlay. 'Automatic' prefers the built-in display with a notch.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     Divider()
 
