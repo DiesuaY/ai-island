@@ -443,9 +443,6 @@ public final class AppState {
 
     // MARK: - Task Tracking
 
-    /// Monotonic counter for generating unique fallback task IDs within a session.
-    private var taskSequence: Int = 0
-
     /// Parse TaskCreate/TaskUpdate tool results and update session task list.
     private func handleTaskToolIfNeeded(session: AgentSession, payload: ClaudeHookPayload) {
         guard let toolName = payload.toolName else { return }
@@ -455,17 +452,16 @@ public final class AppState {
             let title = input.stringValue(forKey: "subject")
                 ?? input.stringValue(forKey: "description")
                 ?? "Untitled task"
-            // Try to get task ID from the tool response
-            let taskID: String
+            // Extract the real task ID from the tool response
             if case let .object(resp)? = payload.toolResponse,
                case let .string(id)? = resp["taskId"] ?? resp["task_id"] ?? resp["id"] {
-                taskID = id
-            } else {
-                // Unique fallback: sequence number ensures no collision even with identical titles
-                taskSequence += 1
-                taskID = "_local_\(taskSequence)"
+                if !session.activeTasks.contains(where: { $0.id == id }) {
+                    session.activeTasks.append(TaskInfo(id: id, title: title))
+                }
             }
-            session.activeTasks.append(TaskInfo(id: taskID, title: title))
+            // If no ID in response, skip — TaskUpdate will create the entry
+            // when it arrives with the real ID. This avoids phantom placeholder
+            // tasks that can never be matched correctly.
         }
 
         if toolName == "TaskUpdate" {
@@ -475,26 +471,18 @@ public final class AppState {
                 ?? input.stringValue(forKey: "id")
             guard let taskID else { return }
 
-            if let statusStr = input.stringValue(forKey: "status"),
-               let status = TaskInfo.TaskStatus(rawValue: statusStr) {
-                // Match by real ID first
-                var idx = session.activeTasks.firstIndex(where: { $0.id == taskID })
-                // Fallback: match a local-ID task by title for stronger correlation
-                if idx == nil {
-                    let subject = input.stringValue(forKey: "subject")
-                    if let subject, !subject.isEmpty {
-                        idx = session.activeTasks.firstIndex(where: {
-                            $0.id.hasPrefix("_local_") && $0.title == subject
-                        })
-                    }
-                    // Last resort: oldest unresolved local task (FIFO)
-                    if idx == nil {
-                        idx = session.activeTasks.firstIndex(where: { $0.id.hasPrefix("_local_") })
-                    }
-                }
-                if let idx {
+            let statusStr = input.stringValue(forKey: "status")
+            let status = statusStr.flatMap { TaskInfo.TaskStatus(rawValue: $0) }
+
+            if let idx = session.activeTasks.firstIndex(where: { $0.id == taskID }) {
+                // Known task — update status
+                if let status {
                     session.activeTasks[idx] = TaskInfo(id: taskID, title: session.activeTasks[idx].title, status: status)
                 }
+            } else {
+                // Unknown task ID — TaskCreate didn't provide the ID, so create now
+                let title = input.stringValue(forKey: "subject") ?? "Task \(taskID)"
+                session.activeTasks.append(TaskInfo(id: taskID, title: title, status: status ?? .pending))
             }
         }
     }
