@@ -47,9 +47,31 @@ struct MonitorModeView: View {
 
             Spacer()
 
+            // Clear all idle/done discovered sessions
+            if appState.sessions.values.contains(where: { $0.isDiscovered && ($0.status == .idle || $0.status == .done) }) {
+                Button {
+                    appState.clearDiscoveredSessions()
+                } label: {
+                    Text("Clear")
+                        .font(DesignTokens.badgeFont)
+                        .foregroundStyle(DesignTokens.textSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+
             Text("\(appState.activeSessionCount) active")
                 .font(DesignTokens.badgeFont)
                 .foregroundStyle(DesignTokens.textSecondary)
+
+            // Collapse button
+            Button {
+                appState.currentMode = .idle
+            } label: {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(DesignTokens.textSecondary)
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -65,6 +87,18 @@ struct MonitorModeView: View {
 
     // MARK: - Session List
 
+    /// Sessions to display: active sessions first, then recent ones, capped at 6.
+    private var visibleSessions: [AgentSession] {
+        let sorted = appState.sortedSessions
+        // Active sessions always shown
+        let active = sorted.filter { $0.status == .working || $0.status == .waitingApproval || $0.status == .waitingAnswer }
+        // Then recent non-active, fill up to 6 total
+        let activeIDs = Set(active.map(\.id))
+        let remaining = sorted.filter { !activeIDs.contains($0.id) }
+        let limit = max(0, 6 - active.count)
+        return active + Array(remaining.prefix(limit))
+    }
+
     private var sessionList: some View {
         VStack(spacing: 2) {
             // Hero card for most recent active session
@@ -74,10 +108,19 @@ struct MonitorModeView: View {
                     .padding(.top, 6)
             }
 
-            // All other sessions
-            ForEach(appState.sortedSessions.filter { $0.id != appState.heroSession?.id }) { session in
+            // Other visible sessions
+            ForEach(visibleSessions.filter { $0.id != appState.heroSession?.id }) { session in
                 SessionRowView(session: session)
                     .padding(.horizontal, 8)
+            }
+
+            // Overflow indicator
+            let hidden = appState.sessions.count - visibleSessions.count
+            if hidden > 0 {
+                Text("+\(hidden) more sessions")
+                    .font(DesignTokens.badgeFont)
+                    .foregroundStyle(DesignTokens.textSecondary)
+                    .padding(.top, 4)
             }
         }
         .padding(.bottom, 8)

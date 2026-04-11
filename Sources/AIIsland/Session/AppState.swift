@@ -55,6 +55,18 @@ public final class AppState {
         }
     }
 
+    /// Remove all idle/done discovered sessions from the list.
+    func clearDiscoveredSessions() {
+        let toRemove = sessions.filter { $0.value.isDiscovered && ($0.value.status == .idle || $0.value.status == .done) }
+        for id in toRemove.keys {
+            sessions.removeValue(forKey: id)
+        }
+        if sessions.isEmpty {
+            currentMode = .idle
+        }
+        NSLog("[AIIsland] Cleared \(toRemove.count) discovered sessions")
+    }
+
     /// Merge discovered sessions into the active session map without overwriting live sessions.
     private func mergeDiscoveredSessions(_ discovered: [AgentSession]) {
         var merged = 0
